@@ -503,6 +503,64 @@ describe('Bigtable/ReadRows', () => {
     }
   });
 
+  it('should handle row ranges with various infinite start and end key combinations', async () => {
+    function rowRangesInfinite() {
+      service.setService({
+        ReadRows: ReadRowsImpl.createService(
+          STANDARD_SERVICE_WITHOUT_ERRORS
+        ) as ServerImplementationInterface,
+      });
+
+      const readStream = table.createReadStream();
+
+      // Stream push simulate receiving rows.
+      readStream.push({
+        id: '0',
+      });
+
+      // Simulate deadline exceeded.
+      readStream.destroy(new GoogleError('DEADLINE_EXCEEDED'));
+      readStream.on('error', err => {
+        console.error(err);
+        readStream.end();
+      });
+    }
+
+    const rowRanges = [
+      // Unset start key (smallest possible key)
+      {
+        startKeyClosed: '', // Equivalent to unset start_key
+        endKeyOpen: 'row-key-5',
+      },
+      {
+        startKeyOpen: '', // Equivalent to unset start_key
+        endKeyClosed: 'row-key-10',
+      },
+      // Unset end key (largest possible key)
+      {
+        startKeyClosed: 'row-key-15',
+        endKeyOpen: '', // Equivalent to unset end_key
+      },
+      {
+        startKeyOpen: 'row-key-20',
+        endKeyClosed: '', // Equivalent to unset end_key
+      },
+      // Combinations of empty start/end keys
+      {
+        startKeyClosed: '',
+        endKeyClosed: '',
+      },
+      {
+        startKeyOpen: '',
+        endKeyOpen: '',
+      },
+    ];
+
+    const request = {
+      rows: {rowRanges},
+    };
+  });
+
   after(async () => {
     server.shutdown(() => {});
   });
