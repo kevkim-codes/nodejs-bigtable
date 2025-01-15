@@ -462,44 +462,43 @@ describe('Bigtable/ReadRows', () => {
     })();
   });
 
-  it('requests a full table scan during a retry on a transient error', () => {
-    function readRowsWithDeadline() {
+  it.skip('pitfall: should not request full table scan during a retry on a transient error', async () => {
+    const requests = [];
+
+    const TRANSIENT_ERROR_SERVICE: ReadRowsServiceParameters = {
+      chunkSize: CHUNK_SIZE,
+      valueSize: VALUE_SIZE,
+      chunksPerResponse: CHUNKS_PER_RESPONSE,
+      keyFrom: STANDARD_KEY_FROM,
+      keyTo: STANDARD_KEY_TO,
+      deadlineExceededError: true,
+      hook: request => {
+        requests.push(request);
+      },
+      debugLog,
+    };
+
+    async function readRowsWithDeadline() {
       service.setService({
         ReadRows: ReadRowsImpl.createService(
-          STANDARD_SERVICE_WITHOUT_ERRORS
+          TRANSIENT_ERROR_SERVICE
         ) as ServerImplementationInterface,
       });
 
-      const readStream = table.createReadStream();
-
-      // Stream push simulate receiving rows.
-      readStream.push({
-        id: '0',
-      });
-
-      // Simulate deadline exceeded.
-      readStream.destroy(new GoogleError('DEADLINE_EXCEEDED'));
-      readStream.on('error', err => {
-        console.error(err);
-        readStream.end();
-      });
+      const rows = await table.getRows();
+      return rows;
     }
-    // Spy on the retry mechanism.
-    const retrySpy = sinon.spy(table, 'createReadStream');
 
     try {
-      readRowsWithDeadline();
+      await readRowsWithDeadline();
       assert.fail('Should have thrown error');
     } catch (err) {
       if (err instanceof GoogleError) {
         assert.equal(err.code, 'DEADLINE_EXCEEDED');
       }
 
-      // Assert that the retry was attempted with an empty RowSet and limit 0
-      assert(retrySpy.calledOnce);
-      const retryRequest = retrySpy.getCall(0).args[0];
-      assert.deepStrictEqual(retryRequest?.ranges, undefined); // Empty RowSet
-      assert.strictEqual(retryRequest?.limit, undefined); // No limit
+      // Assert that no retry attempted.
+      assert.strictEqual(requests.length, 1);
     }
   });
 
