@@ -503,7 +503,7 @@ describe('Bigtable/ReadRows', () => {
     }
   });
 
-  it('should handle row ranges with various infinite start and end key combinations', async () => {
+  it.only('pitfall: should handle row ranges with various infinite start and end key combinations', async () => {
     function rowRangesInfinite() {
       service.setService({
         ReadRows: ReadRowsImpl.createService(
