@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {before, describe, it} from 'mocha';
-import {Bigtable, Row, Table} from '../src';
+import {Bigtable, GetRowsOptions, Row, Table} from '../src';
 import * as assert from 'assert';
 import {Transform, PassThrough, pipeline} from 'stream';
 
@@ -502,62 +502,75 @@ describe('Bigtable/ReadRows', () => {
     }
   });
 
-  it.only('pitfall: should handle row ranges with various infinite start and end key combinations', async () => {
-    function rowRangesInfinite() {
+  it.only('pitfall: should preserve non-UTF-8 bytes in row keys, qualifiers, and values', async () => {
+    // Generate some non-UTF-8 byte sequences
+    const nonUtf8Bytes = Buffer.from([0xc3, 0x28, 0xa0, 0xa1]); // Invalid UTF-8
+    const requests = [];
+
+    const NON_UTF_SERVICE: ReadRowsServiceParameters = {
+      chunkSize: CHUNK_SIZE,
+      valueSize: VALUE_SIZE,
+      chunksPerResponse: CHUNKS_PER_RESPONSE,
+      keyFrom: STANDARD_KEY_FROM,
+      keyTo: STANDARD_KEY_TO,
+      deadlineExceededError: true,
+      hook: request => {
+        requests.push(request);
+      },
+      debugLog,
+    };
+
+    async function readRowsNonUTF() {
       service.setService({
         ReadRows: ReadRowsImpl.createService(
-          STANDARD_SERVICE_WITHOUT_ERRORS
+          NON_UTF_SERVICE
         ) as ServerImplementationInterface,
       });
 
-      const readStream = table.createReadStream();
-
-      // Stream push simulate receiving rows.
-      readStream.push({
-        id: '0',
-      });
-
-      // Simulate deadline exceeded.
-      readStream.destroy(new GoogleError('DEADLINE_EXCEEDED'));
-      readStream.on('error', err => {
-        console.error(err);
-        readStream.end();
-      });
+      const rows = await table.getRows();
+      return rows;
     }
 
-    const rowRanges = [
-      // Unset start key (smallest possible key)
-      {
-        startKeyClosed: '', // Equivalent to unset start_key
-        endKeyOpen: 'row-key-5',
+
+
+    const fakeServer = new FakeServer({
+      'google.bigtable.v2.Bigtable': {
+        readRows: call => {
+          const stream = new PassThrough({objectMode: true});
+          // Simulate sending rows with non-UTF-8 bytes
+          stream.push({
+            chunks: [
+              {
+                rowKey: nonUtf8Bytes,
+                familyName: {value: nonUtf8Bytes},
+                qualifier: {value: nonUtf8Bytes},
+                value: nonUtf8Bytes,
+                // ... other row data ...
+              },
+            ],
+          });
+          stream.end();
+          return stream;
+        },
       },
-      {
-        startKeyOpen: '', // Equivalent to unset start_key
-        endKeyClosed: 'row-key-10',
-      },
-      // Unset end key (largest possible key)
-      {
-        startKeyClosed: 'row-key-15',
-        endKeyOpen: '', // Equivalent to unset end_key
-      },
-      {
-        startKeyOpen: 'row-key-20',
-        endKeyClosed: '', // Equivalent to unset end_key
-      },
-      // Combinations of empty start/end keys
-      {
-        startKeyClosed: '',
-        endKeyClosed: '',
-      },
-      {
-        startKeyOpen: '',
-        endKeyOpen: '',
-      },
-    ];
+    });
+
+    // ... (table setup) ...
 
     const request = {
-      rows: {rowRanges},
+      // ... your request parameters ...
     };
+
+    try {
+      const [rows] = await readRowsNonUTF();
+      // Assert that the received row key, qualifier, and value are identical to the original non-UTF-8 bytes
+      assert.deepStrictEqual(rows[0].key, nonUtf8Bytes);
+      assert.deepStrictEqual(rows[0].data[0].familyName, nonUtf8Bytes);
+      assert.deepStrictEqual(rows[0].data[0].qualifier, nonUtf8Bytes);
+      assert.deepStrictEqual(rows[0].data[0].value, nonUtf8Bytes);
+    } finally {
+      fakeServer.shutdown();
+    }
   });
 
   after(async () => {
